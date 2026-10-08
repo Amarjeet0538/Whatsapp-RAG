@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Secrets and local config
+.env
+
+# Data and indexes (derived or private)
+data/raw/
+*.db
+*.sqlite3
+chroma_data/
+eval/results/
+
+# WhatsApp session
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Node
+node_modules/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
