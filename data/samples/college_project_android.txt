@@ -1,0 +1,49 @@
+01/10/2026, 10:00 - Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them. Learn more.
+01/10/2026, 10:01 - Riya created group "Final Year Project"
+01/10/2026, 10:02 - Riya added Rahul, Amit Client, Priya
+01/10/2026, 10:05 - Riya: Hi sabko, ye group project ke updates ke liye hai
+01/10/2026, 10:06 - Rahul: haan theek hai 👍
+01/10/2026, 10:07 - Priya: okk
+01/10/2026, 10:10 - Riya: Amit ji aap client side se requirements bhej denge?
+01/10/2026, 10:25 - Amit Client: Ji bilkul, main aaj shaam tak requirements document share kar dunga
+01/10/2026, 18:40 - Amit Client: <Media omitted>
+01/10/2026, 18:41 - Amit Client: Ye raha requirements doc. Main features: login, dashboard, aur monthly report export
+01/10/2026, 18:45 - Riya: Thanks Amit ji! Hum review karke kal batate hain
+02/10/2026, 11:02 - Riya: Amit ji payment ka kya status hai? Pehli installment kab tak aayegi?
+02/10/2026, 11:14 - Amit Client: Pehli installment ka paisa 20 tarikh tak aa jayega, accounts team ko bol diya hai
+02/10/2026, 11:15 - Riya: Perfect, thank you
+02/10/2026, 11:16 - Amit Client: Aur delivery 15 November tak pakka ho jani chahiye, uske baad hamara audit hai
+02/10/2026, 11:18 - Rahul: 15 Nov tight hai but ho jayega
+02/10/2026, 11:20 - Priya: haan, agar UI pehle finalize ho jaye toh
+03/10/2026, 16:00 - Priya: guys kal movie chalein? naya wala aaya hai
+03/10/2026, 16:05 - Rahul: haha pehle project khatam karo 😂
+03/10/2026, 16:06 - Priya: 😒 fine
+04/10/2026, 09:30 - Riya: Team meeting kab rakhein? Saturday ya Sunday?
+04/10/2026, 09:35 - Rahul: Saturday better hai, Sunday main ghar ja raha hoon
+04/10/2026, 09:40 - Priya: Saturday 5 baje?
+04/10/2026, 09:42 - Riya: Done, toh final hai Saturday 5 baje library ke paas milte hain
+04/10/2026, 09:43 - Rahul: 👍
+05/10/2026, 20:10 - Riya: Rahul tum database design ka report kab tak bhejoge?
+05/10/2026, 20:15 - Rahul: main kal tak report bhej dunga, ER diagram almost ready hai
+05/10/2026, 20:16 - Riya: ok great
+05/10/2026, 20:30 - Priya: Mera UI mockup Figma pe hai, link: https://figma.com/file/abc123
+05/10/2026, 20:31 - Priya: feedback dena pls
+06/10/2026, 12:00 - Rahul: Report bhej diya hai mail pe, check karo
+06/10/2026, 12:05 - Riya: Mil gaya, accha hai. Bas normalization section thoda aur detail mein likho
+06/10/2026, 12:06 - Rahul: theek hai, update kar dunga
+07/10/2026, 15:20 - Riya: Budget discussion: hosting aur domain ka kitna kharcha aayega?
+07/10/2026, 15:25 - Rahul: Hosting 800 rupaye mahina, domain 900 saal ka
+07/10/2026, 15:30 - Amit Client: Total budget 25000 tak approved hai humari taraf se, isse zyada mat karna
+07/10/2026, 15:32 - Riya: Noted, 25k ke andar rahenge
+08/10/2026, 10:00 - Priya: Login page ka design final kar diya, blue theme ke saath
+08/10/2026, 10:02 - Amit Client: Blue theme accha hai, approve
+08/10/2026, 10:05 - Riya: This message was deleted
+08/10/2026, 10:06 - Riya: Toh login page blue theme final. Priya next dashboard start karo
+08/10/2026, 10:07 - Priya: haan kal se start karti hoon
+09/10/2026, 19:00 - Rahul: bhai server pe deploy karne ke liye kaunsa platform use karein?
+09/10/2026, 19:05 - Riya: Railway ya Render, dono free tier dete hain
+09/10/2026, 19:10 - Rahul: Render try karta hoon pehle
+09/10/2026, 19:11 - Rahul: agar issue aaya toh Railway
+10/10/2026, 08:15 - Priya: Good morning! aaj chai kaun pila raha hai ☕
+10/10/2026, 08:16 - Rahul: hmm
+10/10/2026, 08:20 - Riya: lol

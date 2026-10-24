@@ -2,7 +2,9 @@
 
 A step-by-step build order for the WhatsApp group-chat RAG assistant. `PRD.md` says what to build and `TRD.md` says how. This file sets the order and gives each step a "done when" check. `TODO.md` holds the detailed checklist for the current phase.
 
-> **You are here: Phase 1, Step 1.3 (config keys)**. Steps 1.1 and 1.2 are done, and every later step is still open.
+> **You are here: MVP done (2026-10-24). Next: Phase 4, Step 4.1 (gateway)**. The HTTP RAG loop works end to end: import a `.txt` export, then `POST /ask` returns a grounded answer with citations, or not-found. Open items from Phases 1-3 are marked `[~]` below.
+>
+> MVP check against the real stack (BGE-M3 + reranker on the RTX 3050, Gemini 3.5 Flash-Lite): 5 of 5 sample questions answered with the correct cited message, the out-of-scope question returned not-found, a non-member got 403, re-import added 0 messages, and latency was 3.0-6.5 s. 56 tests pass.
 
 Legend: `[x]` done, `[~]` in progress / partial, `[ ]` not started.
 
@@ -25,93 +27,100 @@ Phases follow the 16-week timeline in PRD §15. Scope freezes at the end of Phas
 - **Done when:** a one-line `ChatGoogleGenerativeAI` call returns text, `pip install -r api/requirements.txt` succeeds with every version pinned, and `ruff check` runs. ✔ (2026-10-24: Gemini text and structured-output calls work; deps pinned; ruff + black configured in `pyproject.toml`; torch sees the RTX 3050 via CUDA.)
 - Latency issue (resolved 2026-10-24): `gemini-3.8-flash` calls took 30-123 s. The cause was Google's server time on the free tier (`server-timing` header ~123 s for 14 tokens). The network (0.7 s round trip), SDK retries (none), and thinking tokens (0) were ruled out. Switched to `gemini-3.5-flash-lite`: 2.7-5.9 s per call through LangChain, with valid structured output in 3 of 3 runs. Flash-Lite ignores `temperature` (fixed sampling) and sometimes returns `503 high demand`, so the 1.4 factory needs retry with backoff. Minor: this machine has no IPv6 route, so the first connection loses ~1 s on the IPv6 attempt. See TRD §17.1.
 
-### 1.3 [ ] Config keys (TRD §8)
+### 1.3 [x] Config keys (TRD §8)
 - Already added: `llm_provider`, `llm_model`, `llm_max_tokens`, `llm_thinking_level`, `google_api_key`. Still to add: `reranker_model`, `rerank_top_n`, `rrf_k`, `chroma_dir`, `min_relevance`, `max_chunk_tokens`, `min_chunk_chars`, `summary_direct_tokens`, `db_url` to both `config.yaml` and `Settings`.
-- **Done when:** `get_settings()` exposes every TRD §8 key, and an env var overrides the YAML value.
+- **Done when:** `get_settings()` exposes every TRD §8 key, and an env var overrides the YAML value. ✔ (`summary_direct_tokens` moves to Phase 5. Also added: `llm_max_retries`, `embed_batch_size`, `query_rewrite_enabled`, `id_hash_salt`.)
 
-### 1.4 [ ] Model factories in `app/llm/` (TRD §2.5)
+### 1.4 [x] Model factories in `app/llm/` (TRD §2.5)
 - `get_chat_model()` returns `ChatGoogleGenerativeAI` (model, temperature set explicitly, `max_tokens`, `thinking_level`, `max_retries` from config). It fails fast if `google_api_key` is empty, and it retries `503`/`429` with backoff.
 - `get_embeddings()` returns `HuggingFaceEmbeddings("BAAI/bge-m3", normalize_embeddings=True)`, cached as a singleton.
 - `get_reranker()` returns `HuggingFaceCrossEncoder`, or `None` when `reranker_enabled=false`.
 - Write a smoke script: `with_structured_output(<Pydantic model>)` on a Hinglish prompt.
-- **Done when:** the smoke script returns a valid Pydantic object from Gemini 3.5 Flash-Lite.
+- **Done when:** the smoke script returns a valid Pydantic object from Gemini 3.5 Flash-Lite. ✔ (The MVP run covers this.) On GPU both local models load in fp16: in fp32 they need ~4.6 GB and overflowed the 4 GB card. The reranker returns raw logits, because the sigmoid squashed every score to ~0.
 
-### 1.5 [ ] Test scaffold (TRD §12)
+### 1.5 [x] Test scaffold (TRD §12)
 - `api/tests/conftest.py` with fixtures for `GenericFakeChatModel` / `FakeListChatModel`, fake embeddings, and an in-memory SQLite.
 - `Makefile` target: `make test`.
-- **Done when:** `make test` runs green with at least one test (config loading).
+- **Done when:** `make test` runs green with at least one test (config loading). ✔ Fakes: `FakeListChatModel`, a bag-of-words embedding, an overlap reranker, and a per-test SQLite file.
 
-### 1.6 [ ] Synthetic Hinglish dataset plan (PRD §12.1, TRD §13)
+### 1.6 [~] Synthetic Hinglish dataset plan (PRD §12.1, TRD §13)
 - Pick the scenarios (college project, client group, family). Write sample Android and iOS export fixtures under `data/samples/`.
 - Stub the generator script (`eval/generate_synthetic.py`) and set the target of 5,000+ messages, about 20% manually audited.
 - **Done when:** fixture files exist for both export formats, and the generator plan is written down.
+- Status: `data/samples/college_project_android.txt` (49 messages, known facts). iOS lines are only covered inline in parser tests. The generator is not started.
 
 ---
 
 ## Phase 2: Ingestion and indexing (weeks 3-4)
 
-### 2.1 [ ] DB layer (TRD §6.1)
+### 2.1 [~] DB layer (TRD §6.1)
 - `app/db/`: engine, session, SQLite pragmas, Alembic setup. `app/models/`: SQLAlchemy models for groups, users, memberships, messages, chunks, action_items, decisions, topics, query_logs.
 - Create the FTS5 virtual table `chunks_fts` through a migration.
 - **Done when:** `alembic upgrade head` creates every table, and a model round-trip test passes.
+- Status: `init_db()` uses `create_all` plus FTS5 DDL; Alembic comes in before the first schema change. Models cover the MVP tables (groups, users, memberships, messages, chunks, query_logs). action_items, decisions and topics are added with Phases 7-8.
 
-### 2.2 [ ] Chat export parser (TRD §5.2; FR-ING-1, 2, 3, 5)
+### 2.2 [x] Chat export parser (TRD §5.2; FR-ING-1, 2, 3, 5)
 - `app/ingestion/parser.py`: regex patterns for Android and iOS, 12h/24h, DD/MM vs MM/DD auto-detection, BOM handling, multi-line joining, system-line flags, `sha1` dedup key.
 - Hash phone numbers / map display names to `wa_id_hash` (TRD §10). Batch inserts of 1,000.
-- **Done when:** unit tests cover Android 24h, Android 12h, iOS, multi-line, emoji, system lines, and date order, and re-importing the same file inserts 0 rows.
+- **Done when:** unit tests cover Android 24h, Android 12h, iOS, multi-line, emoji, system lines, and date order, and re-importing the same file inserts 0 rows. ✔ Known gap: a system line containing `": "` (e.g. a subject change to "a: b") is read as a chat message.
 
-### 2.3 [ ] Cleaner and Hinglish normalizer (TRD §5.3; FR-IDX-1)
+### 2.3 [x] Cleaner and Hinglish normalizer (TRD §5.3; FR-IDX-1)
 - `app/ingestion/cleaner.py`: NFKC, lowercase, repeat collapse, `<url>`/`<phone>`, emoji to text. A YAML variant dictionary (`kb/kab/kub → kab`, …) keeps numbers and names untouched.
 - One function, used for both indexed text and queries.
 - **Done when:** table-driven tests pass, and `text_clean` is filled on import.
 
-### 2.4 [ ] Chunker (TRD §5.4; FR-IDX-2, 3, 7)
+### 2.4 [x] Chunker (TRD §5.4; FR-IDX-2, 3, 7)
 - `app/indexing/chunker.py`: 30-min gap split, window 10 / overlap 3, token cap, merging short chunks, `[HH:MM] Sender: msg` lines with a date header, system messages excluded.
 - Output `Document`s with scalar metadata (epoch `start_ts`/`end_ts`, joined participants and message IDs). Persist to `chunks`.
-- **Done when:** tests check gap splitting, overlap, the cap, and the short-chunk merge, and no chunk is made of a lone "ok".
+- **Done when:** tests check gap splitting, overlap, the cap, and the short-chunk merge, and no chunk is made of a lone "ok". ✔ The token cap uses a ~4 chars/token estimate instead of loading a tokenizer.
 
-### 2.5 [ ] Vector store and FTS5 retriever (TRD §5.5, §6.2; FR-IDX-4, 5)
+### 2.5 [x] Vector store and FTS5 retriever (TRD §5.5, §6.2; FR-IDX-4, 5)
 - `app/indexing/vector_store.py`: `get_store(group_id)` returns `Chroma(collection_name="grp_<id>", persist_directory=chroma_dir)`, with idempotent `add_documents(ids=["chunk_<id>"])`.
 - `app/indexing/fts.py`: FTS5 insert/delete plus an `FTS5Retriever(BaseRetriever)` that returns Documents with the same metadata.
-- **Done when:** indexing a fixture group twice leaves the counts unchanged, and both retrievers return the expected chunk for a known query.
+- **Done when:** indexing a fixture group twice leaves the counts unchanged, and both retrievers return the expected chunk for a known query. ✔ `chunks_fts` is a plain FTS5 table (not contentless) so rows can be deleted by rowid.
 
-### 2.6 [ ] Import endpoint, auth, health (TRD §7)
+### 2.6 [x] Import endpoint, auth, health (TRD §7)
 - `app/routers/`: `POST /groups/{id}/import` (multipart, synchronous for now; moves to a job in 4.3). `X-API-Key` dependency. Error envelope `{error:{code,message}}`. Delete the raw upload after parsing.
 - `/health` checks the DB, Chroma, and that the Gemini key is configured (a cheap `models.get` call).
-- **Done when:** an httpx integration test runs import → messages → chunks → both indexes on a fixture chat.
+- **Done when:** an httpx integration test runs import → messages → chunks → both indexes on a fixture chat. ✔ Group `{id}` in the URL is the WhatsApp group id (what the gateway knows). The upload stays in memory and is never written to disk. `/health` checks that the key is present, without a network call.
 
-### 2.7 [ ] Reindex command (TRD §9)
+### 2.7 [~] Reindex command (TRD §9)
 - Script plus `make reindex` that rebuilds Chroma and FTS5 from `messages`.
 - **Done when:** deleting `chroma_data` and running `make reindex` restores the search results.
+- Status: `index_group()` rebuilds a group from `messages` (each import calls it). The `make reindex` CLI wrapper is still to do.
 
 ---
 
 ## Phase 3: Core RAG (weeks 5-6)
 
-### 3.1 [ ] Prompt loading (TRD §2.5.5)
+### 3.1 [x] Prompt loading (TRD §2.5.5)
 - `app/prompts/*.yaml` (versioned, e.g. `answer_v1.yaml`), with a loader that returns `ChatPromptTemplate` and the version string. Excerpts sit in delimited blocks, with an instruction to ignore any instructions found inside them.
 
-### 3.2 [ ] Intent and query rewrite (TRD §5.6; FR-QA-2)
+### 3.2 [~] Intent and query rewrite (TRD §5.6; FR-QA-2)
 - `app/query/intent.py`: rule-based first, LLM structured-output fallback, default `ask`.
 - `app/query/rewriter.py`: `prompt | llm.with_structured_output(Rewrite)` → `{normalized, expansions, keywords}`, retry once.
+- Status: the rewrite is done (`app/query/rewrite.py`, one retry, then falls back to the raw question). The intent classifier moves to Step 4.2, where the command router needs it; `/ask` is ask-only.
 
-### 3.3 [ ] Hybrid retrieval and RRF (FR-QA-3)
+### 3.3 [x] Hybrid retrieval and RRF (FR-QA-3)
 - `app/query/retrieve.py`: `RunnableParallel` (vector over normalized + expansions, FTS5 over keywords), then a custom `rrf_merge` (k = `rrf_k`). Retrievers are built per request with the group and time filter.
-- **Done when:** RRF has unit tests, and a paraphrase query ("payment kab milega" vs "paisa 20 tarikh tak") hits the right chunk.
+- **Done when:** RRF has unit tests, and a paraphrase query ("payment kab milega" vs "paisa 20 tarikh tak") hits the right chunk. ✔ ("client ne payment kab bola tha?" cites Amit's "paisa 20 tarikh tak".) The time filter comes with Phase 6.
 
-### 3.4 [ ] Reranker and no-answer gate (FR-QA-4, 7)
+### 3.4 [x] Reranker and no-answer gate (FR-QA-4, 7)
 - `app/query/rerank.py`: cross-encoder over the top `rerank_top_n`, keeping `final_top_k` and exposing `best_score`. `RunnableBranch` returns not-found below `min_relevance`. Passes through when the reranker is disabled.
+- Each candidate keeps its best score over the question **and** the rewrite expansions, because bge-reranker misses Hinglish paraphrases ("payment" vs "paisa" logit -10.8, about as low as an irrelevant pair at -11). `min_relevance = -8.0` (raw logit) is a starting point; calibrate it in 9.4.
 
-### 3.5 [ ] Grounded answer and citations (FR-QA-5, 6, 8)
+### 3.5 [x] Grounded answer and citations (FR-QA-5, 6, 8)
 - `app/query/answer.py`: format excerpts, `ChatGoogleGenerativeAI(temperature=0.1, max_tokens=400)`, parse `SOURCES: [..]` and `NOT_FOUND`, pick the 1-2 best messages per source (sender, ts, snippet).
+- Citation pick: embed `[HH:MM] Sender: text` and boost the message whose time the answer quotes. Similarity alone cited the *question* ("kab tak bhejoge?") instead of the reply.
 
-### 3.6 [ ] `ask_chain`, endpoint, logging (TRD §5.6, §7)
+### 3.6 [x] `ask_chain`, endpoint, logging (TRD §5.6, §7)
 - `app/query/chain.py` assembles the LCEL pipeline. `POST /groups/{id}/ask` enforces membership.
 - `app/llm/callbacks.py`: a `BaseCallbackHandler` that writes to `query_logs` (chunk IDs, latency, model, prompt version).
-- **Done when:** the response matches the TRD §7 example shape, a non-member gets 403, and a log row is written.
+- **Done when:** the response matches the TRD §7 example shape, a non-member gets 403, and a log row is written. ✔ The `query_logs` row is written by the endpoint, not a callback handler (still local-only). Move it to a `BaseCallbackHandler` when per-stage timings are needed for the eval.
 
-### 3.7 [ ] First golden tests
+### 3.7 [~] First golden tests
 - Fake-LLM chain tests for found / not-found. Start `eval/datasets/qa.jsonl` with about 20 labeled questions.
+- Status: the fake-LLM chain tests are done (`api/tests/test_ask_chain.py`). `qa.jsonl` is not started.
 
 ---
 

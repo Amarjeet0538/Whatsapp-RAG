@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-Early skeleton for a WhatsApp group-chat RAG assistant (final-year B.Tech project). Only `api/app/config.py` and a `/api/v1/health` endpoint in `api/app/main.py` exist; the other module directories hold `.gitkeep` placeholders. `Makefile` and `docker-compose.yml` are empty. ruff, black and pytest are configured in `pyproject.toml`, but there are no tests yet. The LLM is Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`) via the Gemini API (`GOOGLE_API_KEY` in `.env`); there is no local LLM.
+WhatsApp group-chat RAG assistant (final-year B.Tech project). The HTTP MVP (Phases 1-3) works: `POST /api/v1/groups/{wa_group_id}/import` (parse, clean, chunk, then index into Chroma and FTS5) and `POST /api/v1/groups/{wa_group_id}/ask` (the LCEL chain in `app/query/chain.py`). The gateway, worker, summaries, time filters, extraction and topics are not built yet. `docker-compose.yml` is empty. ruff, black and pytest are configured in `pyproject.toml`. Tests use fakes (no network, no GPU), see `api/tests/conftest.py`. The LLM is Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`) via the Gemini API (`GOOGLE_API_KEY` in `.env`); there is no local LLM.
 
 `docs/PRD.md` (what) and `docs/TRD.md` (how) are the specification. Read the relevant TRD section before implementing a module; requirement IDs like `FR-QA-3` refer to the PRD. `docs/ROADMAP.md` is the step-by-step build order (with a "You are here" marker); `docs/TODO.md` tracks the current phase.
 
@@ -23,7 +23,7 @@ ruff check . && black --check .   # config in pyproject.toml (line length 100)
 pytest                            # testpaths/pythonpath set in pyproject.toml
 ```
 
-Planned (TRD §14.3, not yet set up): `make up | test | reindex | eval | seed`.
+`make run | test | lint | format` exist. Planned (TRD §14.3): `make up | reindex | eval | seed`.
 
 ## Architecture
 

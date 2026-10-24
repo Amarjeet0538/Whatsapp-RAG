@@ -2,6 +2,7 @@ fastapi==0.142.4
 uvicorn[standard]==0.54.0
 pydantic-settings==2.15.0
 pyyaml==6.0.3
+python-multipart==0.0.32
 
 # LangChain (orchestration; integrations move between packages, so keep exact pins)
 langchain-core==1.7.0

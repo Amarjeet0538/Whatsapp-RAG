@@ -325,6 +325,8 @@ The answer prompt above is stored as `app/prompts/answer_v1.yaml` and loaded int
 
 **No-answer safeguard (FR-QA-7):** if the best reranker score is below `MIN_RELEVANCE` (calibrated on the dev set), skip generation and return the no-answer response.
 
+**Implementation notes (MVP, 2026-10-24):** bge-reranker-v2-m3 scores Hinglish paraphrases close to irrelevant ("payment" vs "paisa": logit -10.8, irrelevant pairs about -11), so each candidate is scored against the question and every rewrite expansion, and keeps its best score. Citations embed `[HH:MM] Sender: text` and boost the message whose time the answer quotes, because answer-to-message similarity alone tends to cite the question rather than the reply.
+
 ### 5.7 Time-filtered queries (FR-TIME-\*)
 
 **Pipeline:** detect, resolve, filter.
@@ -607,7 +609,7 @@ All tunables live in `config.yaml` with environment overrides (`.env`). Key sett
 | `WINDOW_SIZE` / `WINDOW_OVERLAP` | 10 / 3 | Sliding window |
 | `VECTOR_TOP_K` / `BM25_TOP_K` | 20 / 20 | Candidate counts |
 | `FINAL_TOP_K` | 5 | Chunks sent to LLM |
-| `MIN_RELEVANCE` | calibrated | No-answer threshold |
+| `MIN_RELEVANCE` | -8.0 | No-answer threshold on the **raw reranker logit** (best score over the question and its rewrite expansions); calibrate on the dev set |
 | `ACTION_MIN_CONFIDENCE` | 0.6 | Extraction filter |
 | `TIMEZONE` | `Asia/Kolkata` | Date resolution |
 | `RATE_LIMIT_PER_MIN` | 10 | Per-user limit |
