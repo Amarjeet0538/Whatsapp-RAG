@@ -49,7 +49,7 @@ A modular monolith backend (FastAPI) plus one separate gateway service, communic
                          +---------------------+-----------------------+----------------+
                          |                     |                       |                |
                   +------v------+       +------v------+         +------v-----+   +------v------+
-                  | SQLite /    |       | ChromaDB    |         | Ollama     |   | Redis       |
+                  | SQLite /    |       | ChromaDB    |         | Gemini API |   | Redis       |
                   | PostgreSQL  |       | (vectors)   |         | (LLM)      |   | (queue)     |
                   +-------------+       +-------------+         +------------+   +-------------+
 
@@ -61,21 +61,55 @@ A modular monolith backend (FastAPI) plus one separate gateway service, communic
 | Component | Runtime | Responsibility |
 | --- | --- | --- |
 | Gateway | Node.js 20 | Maintain WhatsApp session, receive messages, parse commands, send replies, forward events to Core API |
-| Core API | Python 3.11, FastAPI, Uvicorn | REST endpoints, orchestration of all pipelines |
+| Core API | Python 3.11, FastAPI, Uvicorn, LangChain | REST endpoints; all RAG, summary, and extraction pipelines built as LangChain (LCEL) chains |
 | Worker | Python (RQ or Celery) | Background jobs: embedding, extraction, clustering |
 | Relational DB | SQLite (dev), PostgreSQL 15 (optional) | Messages, users, tasks, decisions, logs |
-| Vector DB | ChromaDB (persistent) | Chunk embeddings plus metadata filtering |
-| Keyword index | SQLite FTS5 or rank\_bm25 | Lexical search for BM25 retrieval |
-| LLM runtime | Ollama | Local generation and structured output |
-| Embedding service | sentence-transformers / FlagEmbedding in Core API | BGE-M3 embeddings |
+| Vector DB | ChromaDB (persistent), accessed via `langchain-chroma` | Chunk embeddings plus metadata filtering |
+| Keyword index | SQLite FTS5 or rank\_bm25, exposed as a LangChain retriever | Lexical search for BM25 retrieval |
+| LLM | Google Gemini API (Gemini 3.5 Flash-Lite), accessed via `langchain-google-genai` (`ChatGoogleGenerativeAI`) | Generation and structured output (cloud; see 10) |
+| Embedding service | `langchain-huggingface` (`HuggingFaceEmbeddings`, sentence-transformers underneath) in Core API | BGE-M3 embeddings |
 | Queue | Redis 7 | Job queue and gateway-to-API event buffer |
 
 ### 2.4 Communication contracts
 
 - Gateway to Core API: HTTP POST (JSON) for events; Core API replies with a message payload for the gateway to send.
 - Core API to Worker: queue jobs (Redis).
-- Core API to Ollama: HTTP on `localhost:11434`.
+- Core API to Gemini: HTTPS to the Gemini API (`GOOGLE_API_KEY`).
 - Long-running commands (`/summary`, `/topics`): Core API returns `202 Accepted` with a job ID; the Gateway polls or receives a callback and sends the result when ready.
+
+### 2.5 Orchestration with LangChain
+
+The Core API and Worker use LangChain as the orchestration layer. LangChain is used for its **standard interfaces** (chat model, embeddings, vector store, retriever, document) and for **LCEL composition** (`prompt | model | parser`), so every pipeline is a chain of small, individually testable runnables.
+
+**Design principles**
+
+1. **Depend on `langchain-core` plus integration packages** (`langchain-google-genai`, `langchain-chroma`, `langchain-huggingface`, `langchain-community`). Avoid legacy/high-level chains (`RetrievalQA`, `load_summarize_chain`, etc.); write each pipeline explicitly in LCEL so every step is visible, logged, and explainable in the viva.
+2. **Domain logic stays in plain Python.** Chat parsing, Hinglish normalization, time-gap chunking, date resolution, dedup, and authorization are ordinary functions, wrapped as `RunnableLambda` only where they sit inside a chain. The LLM never computes dates or parses commands.
+3. **One factory module for models.** `app/llm/` builds the chat model, embeddings, and reranker from `config.yaml`, so swapping one Gemini model for another, or Chroma for Qdrant, is a config change.
+4. **Structured output everywhere JSON is expected.** Intent, query rewrite, action items, decisions, and summaries use `ChatGoogleGenerativeAI.with_structured_output(<PydanticModel>)` (Gemini native JSON-schema output, `method="json_schema"`), with `.with_retry()` / one correction retry on validation failure.
+5. **Prompts are versioned files** in `app/prompts/`, loaded into `ChatPromptTemplate` objects; the prompt version is recorded in each query log.
+6. **Local-only observability.** A custom `BaseCallbackHandler` writes chain inputs, retrieved chunk IDs, latency, and model name to `query_logs`. LangSmith tracing is explicitly disabled (`LANGSMITH_TRACING=false`) because no chat content may leave the machine.
+
+**Component mapping**
+
+| System concern | LangChain building block | Notes |
+| --- | --- | --- |
+| LLM | `langchain_google_genai.ChatGoogleGenerativeAI` | `model`, `temperature`, `max_tokens`, `thinking_level` from config; API key from `.env` |
+| Structured output | `.with_structured_output(PydanticModel)` | Replaces hand-rolled JSON parsing |
+| Embeddings | `langchain_huggingface.HuggingFaceEmbeddings("BAAI/bge-m3")` | `normalize_embeddings=True`; runs locally, so the full chat history never leaves the machine |
+| Chunk unit | `langchain_core.documents.Document` | `page_content` = chunk text, `metadata` = group/time/participants/message IDs |
+| Export parsing | Custom parser, optionally wrapped as a `BaseLoader` | The community `WhatsAppChatLoader` is not used: it lacks iOS/12h format detection and system-message flags |
+| Chunking | Custom time-gap + sliding-window chunker | Character splitters (`RecursiveCharacterTextSplitter`) ignore conversation boundaries; used only as a fallback for oversize chunks |
+| Vector store | `langchain_chroma.Chroma` (one collection per group) | The TRD `VectorStore` interface is LangChain's `VectorStore`; Qdrant via `langchain-qdrant` |
+| Vector retrieval | `vectorstore.as_retriever(search_kwargs={"k": ..., "filter": ...})` | Time range applied as a Chroma `where` filter |
+| BM25 retrieval | Custom `BaseRetriever` over SQLite FTS5 | `langchain_community.retrievers.BM25Retriever` (rank\_bm25, in-memory) for early prototyping |
+| Hybrid merge | Custom RRF runnable | `EnsembleRetriever` also implements RRF but cannot send different queries (expansions vs keywords) to each retriever |
+| Reranking | `HuggingFaceCrossEncoder("BAAI/bge-reranker-v2-m3")` | Wrapped in a small runnable that also exposes the top score for the no-answer threshold |
+| Prompts | `ChatPromptTemplate` | Loaded from `app/prompts/` |
+| Map-reduce summary | LCEL: map chain run with `.batch()`, then reduce chain | Recursive reduce when combined text exceeds the token budget |
+| Follow-up memory (P2) | `RunnableWithMessageHistory` with a SQLite-backed history | Short window, per user per group |
+| Observability | Custom `BaseCallbackHandler` | Writes to `query_logs`; LangSmith off |
+| Testing | `GenericFakeChatModel` / `FakeListChatModel`, fake embeddings | Deterministic chain tests without network calls |
 
 ---
 
@@ -85,9 +119,8 @@ A modular monolith backend (FastAPI) plus one separate gateway service, communic
 | --- | --- | --- |
 | Gateway | Node.js 20 LTS, whatsapp-web.js (pin exact version) | Baileys kept as fallback behind the same interface |
 | Backend | Python 3.11, FastAPI, Pydantic v2, Uvicorn | Async endpoints |
-| LLM runtime | Ollama | Models pulled by name |
-| Primary LLM | Qwen2.5-7B-Instruct (Q4\_K\_M) | Config key `LLM_MODEL` |
-| Fallback LLMs | Llama-3.1-8B-Instruct, Gemma-2-9B, Qwen2.5-3B (low-resource) | Swappable |
+| LLM provider | Google Gemini API | Config key `LLM_PROVIDER`; no local fallback model |
+| Primary LLM | `gemini-3.5-flash-lite` | Config key `LLM_MODEL`; `gemini-3.8-flash` is stronger but was too slow on the free tier (see 17) |
 | Embeddings | BAAI/bge-m3 (1024-dim) | Alt: multilingual-e5-large |
 | Reranker | BAAI/bge-reranker-v2-m3 | Optional, toggled by config |
 | Vector DB | ChromaDB | Behind a `VectorStore` interface; Qdrant as alternative |
@@ -100,7 +133,8 @@ A modular monolith backend (FastAPI) plus one separate gateway service, communic
 | Testing | pytest, pytest-asyncio, httpx; Jest for gateway |  |
 | Tooling | Docker, Docker Compose, Makefile, pre-commit, ruff, black |  |
 | Logging | structlog (JSON logs) |  |
-| Orchestration framework | Plain Python modules; LangChain or LlamaIndex only for small helpers | Keeps pipeline transparent for the viva |
+| Orchestration framework | LangChain: `langchain-core` (LCEL, prompts, documents, retrievers, callbacks) | Pipelines written explicitly in LCEL to stay transparent for the viva (see 2.5) |
+| LangChain integrations | `langchain-google-genai`, `langchain-chroma`, `langchain-huggingface`, `langchain-community` | Pin exact versions; LangChain integrations move between packages across releases |
 
 ---
 
@@ -110,15 +144,14 @@ A modular monolith backend (FastAPI) plus one separate gateway service, communic
 
 | Profile | Spec | Expected setup |
 | --- | --- | --- |
-| **A (recommended)** | 16-32 GB RAM, GPU with 8-12 GB VRAM | Qwen2.5-7B Q4, BGE-M3 on GPU, reranker on GPU |
-| **B (minimum)** | 16 GB RAM, CPU only | Qwen2.5-3B Q4 or 7B Q4 (slow), embeddings on CPU, reranker off or small |
-| **C (constrained)** | 8 GB RAM, CPU only | 3B model, multilingual-e5-base, no reranker, smaller chunk batches |
+| **A (recommended)** | 16 GB RAM, GPU with 4 GB+ VRAM | LLM via Gemini API; BGE-M3 and reranker on GPU |
+| **B (minimum)** | 16 GB RAM, CPU only | LLM via Gemini API; embeddings on CPU, reranker off or small |
+| **C (constrained)** | 8 GB RAM, CPU only | LLM via Gemini API, multilingual-e5-base, no reranker, smaller chunk batches |
 
 ### 4.2 Approximate resource budget (Profile A)
 
 | Item | Memory |
 | --- | --- |
-| Qwen2.5-7B Q4\_K\_M | \~5 GB VRAM |
 | BGE-M3 | \~2.5 GB (GPU or RAM) |
 | Reranker | \~1.5 GB |
 | ChromaDB, API, Redis, DB | \~2 GB RAM |
@@ -181,6 +214,8 @@ Docker and Docker Compose, NVIDIA drivers and container toolkit (if GPU), Git, a
 
 **Deduplication key:** `sha1(group_id + timestamp + sender + text_raw)`. Live-captured messages use the same key so imports never duplicate them.
 
+**LangChain:** the parser is plain Python and writes to the relational DB (source of truth). It may additionally be exposed as a `BaseLoader` (`lazy_load()` yielding one `Document` per message) for use in eval scripts. The community `WhatsAppChatLoader` is not used (see 2.5).
+
 ### 5.3 Text preprocessing (FR-IDX-1)
 
 Two text fields are kept: `text_raw` (displayed to users) and `text_clean` (used for indexing).
@@ -212,14 +247,17 @@ Two text fields are kept: `text_raw` (displayed to users) and `text_clean` (used
 
 Messages that are system messages or media placeholders are excluded from chunk text.
 
+**LangChain:** the chunker outputs `Document` objects (`page_content` = chunk text, `metadata` = the chunk record fields, with `start_ts`/`end_ts` as epoch ints and lists joined to strings, since Chroma metadata must be scalar). Token counting for `MAX_CHUNK_TOKENS` uses the chat model's `get_num_tokens()` or the embedding tokenizer.
+
 ### 5.5 Embedding and indexing (FR-IDX-4 to 6)
 
 - Model: BGE-M3, dense vectors (1024-dim), normalized; batch size 32 (GPU) or 8 (CPU).
 - Vector store collection per group: `grp_<group_id>`. Metadata stored with each vector: `start_ts` and `end_ts` as integer epoch seconds (required for range filters), `participants` as a joined string, `message_count`.
 - Indexing runs as a worker job. Imports queue all chunks; live messages are accumulated and indexed when either 10 new messages arrive or 60 seconds pass.
 - Idempotent upserts keyed by `chunk_id`; the last open chunk for a group is re-embedded when new messages extend it.
-- A `VectorStore` interface (`upsert`, `query`, `delete_group`) hides the Chroma specifics.
-- BM25: SQLite FTS5 virtual table over `text_clean` of chunks with `group_id` as an unindexed column.
+- The `VectorStore` interface is LangChain's `VectorStore`: `langchain_chroma.Chroma(collection_name="grp_<group_id>", embedding_function=<HuggingFaceEmbeddings>, persist_directory=...)`. Upserts use `add_documents(docs, ids=[...])`, group purge deletes the collection. A thin `app/indexing/vector_store.py` helper returns the store for a group so Chroma specifics stay in one place.
+- Embeddings: `HuggingFaceEmbeddings(model_name="BAAI/bge-m3", encode_kwargs={"normalize_embeddings": True, "batch_size": ...})`, built once in `app/llm/` and shared by API and worker.
+- BM25: SQLite FTS5 virtual table over `text_clean` of chunks with `group_id` as an unindexed column, wrapped in a custom `BaseRetriever` (`FTS5Retriever`) that returns `Document`s with the same metadata as the vector store.
 
 ### 5.6 Query pipeline (FR-QA-\*)
 
@@ -228,6 +266,21 @@ question -> intent classifier -> time parser -> query rewriter
          -> (vector top-K, BM25 top-K) -> RRF merge -> reranker -> context builder
          -> LLM answer (grounded) -> citation attach -> reply
 ```
+
+**LangChain composition (LCEL)**
+
+```
+ask_chain =
+    RunnablePassthrough.assign(intent=intent_chain)          # rules first, else LLM structured output
+  | RunnablePassthrough.assign(time_range=time_parser)       # RunnableLambda, pure Python
+  | RunnablePassthrough.assign(rewrite=rewrite_chain)        # ChatPromptTemplate | llm.with_structured_output(Rewrite)
+  | RunnablePassthrough.assign(candidates=hybrid_retrieve)   # RunnableParallel(vector, fts5) -> rrf_merge
+  | RunnablePassthrough.assign(top=rerank)                   # cross-encoder, keeps best score
+  | RunnableBranch((below_min_relevance, not_found), answer_chain)
+  | attach_citations                                          # RunnableLambda
+```
+
+Each stage is its own runnable in `app/query/`, so it can be unit-tested and ablated (e.g., run the eval with `rewrite` or `rerank` swapped for a passthrough). Retrievers are built per request because the Chroma collection and the time filter depend on the group and query.
 
 **Intent classification** Rule-based first (slash commands map directly). For free text, a lightweight LLM call returns one of `ask | summary | tasks | decisions | topics | help | chitchat` as JSON. Fallback is `ask`.
 
@@ -266,7 +319,9 @@ Excerpts:
 1. Parse `SOURCES` and map to chunk metadata.
 2. For each source, pick the 1-2 most relevant messages (highest embedding similarity to the answer) and show sender, timestamp, and a snippet.
 3. If the model returns `NOT_FOUND`, send the no-answer message instead.
-4. Temperature 0.1; max output tokens 400.
+4. Temperature 0.1; max output tokens 400 (`ChatGoogleGenerativeAI(temperature=0.1, max_tokens=400)`); set temperature explicitly because Gemini 3 defaults to 1.0.
+
+The answer prompt above is stored as `app/prompts/answer_v1.yaml` and loaded into a `ChatPromptTemplate`; the excerpt block is rendered from the reranked `Document`s by a formatting runnable.
 
 **No-answer safeguard (FR-QA-7):** if the best reranker score is below `MIN_RELEVANCE` (calibrated on the dev set), skip generation and return the no-answer response.
 
@@ -276,7 +331,7 @@ Excerpts:
 
 1. **Detection:** regex and keyword rules for English and Hinglish terms: `aaj`, `kal` (ambiguous: yesterday or tomorrow; resolve by verb tense, with a default of yesterday for queries about past discussion), `parso`, `pichhle hafte`, `is mahine`, `last week`, `past 3 days`, `in March`, `between X and Y`.
 2. **Resolution:** convert to `(start_ts, end_ts)` in IST using `dateparser` with `RELATIVE_BASE = now` and a custom rule table for Hinglish phrases. Week boundaries use Monday start.
-3. **Filter:** pass epoch-second range into vector `where` clause (`start_ts <= end` and `end_ts >= start`) and into the FTS5 SQL query.
+3. **Filter:** pass epoch-second range into the vector retriever's `filter` (Chroma `where`: `{"$and": [{"start_ts": {"$lte": end}}, {"end_ts": {"$gte": start}}]}`) and into the FTS5 SQL query.
 4. **Echo:** the reply begins with "Showing results from {start} to {end}".
 5. If a time phrase is detected but resolution fails, ask the user to clarify rather than silently searching everything.
 6. The LLM is never trusted to compute dates; all resolution is done in code.
@@ -296,6 +351,8 @@ Excerpts:
 4. **Reduce:** combine segment summaries into the final structured summary. If the combined text is still too long, reduce recursively.
 5. Output format by length option: short (3-5 lines), standard (overview, key topics, updates, open questions), detailed (adds per-topic sections).
 6. Update `last_seen_message_id` and `last_seen_at` only after the summary is delivered successfully.
+
+**LangChain:** `map_chain = map_prompt | llm | StrOutputParser()` runs over segments with `map_chain.batch(segments, config={"max_concurrency": 1-2})` (concurrency kept low to respect Gemini rate limits). `reduce_chain = reduce_prompt | llm.with_structured_output(Summary)`. The recursive reduce is a plain Python loop around the reduce chain, guarded by `get_num_tokens()`. Legacy `load_summarize_chain` is not used.
 
 **Final-summary schema**
 
@@ -336,7 +393,7 @@ The bot renders this into WhatsApp formatting (bold headings with `*text*`, bull
 
 **Post-processing (in code)**
 
-1. Validate JSON with Pydantic; retry once on failure with an error hint; skip on second failure and log it.
+1. Generate with `extract_prompt | llm.with_structured_output(ActionItems)` (Pydantic schema in `app/models/`); on validation failure retry once with an error hint; skip on second failure and log it.
 2. Map `owner_name` to a user ID (fuzzy match on group members; "I"/"main"/"me" resolve to the message sender).
 3. Convert `deadline_text` to an absolute date using the source message timestamp as the base (reuse the time parser).
 4. Drop items below `ACTION_MIN_CONFIDENCE` (default 0.6).
@@ -369,7 +426,7 @@ Same pipeline pattern as action items with a separate prompt and schema:
 1. Collect chunk embeddings for the group (optionally over a date range).
 2. UMAP (n\_neighbors=15, n\_components=5, cosine) then HDBSCAN (min\_cluster\_size scaled to data size). KMeans fallback if HDBSCAN returns mostly noise.
 3. Extract top terms per cluster with c-TF-IDF (BERTopic).
-4. **Label generation:** LLM receives top terms plus 3 representative chunks and returns a 2-4 word label.
+4. **Label generation:** LLM receives top terms plus 3 representative chunks and returns a 2-4 word label (`label_prompt | llm | StrOutputParser()`, run with `.batch()` over topics). Clustering itself (UMAP, HDBSCAN, BERTopic) is outside LangChain; embeddings are read back from Chroma rather than recomputed.
 5. Compute per-topic message counts, percentage share, and weekly volume.
 6. Render a horizontal bar chart (top 8 topics) and, optionally, a topic-over-time chart with matplotlib; send as an image.
 7. Persist results in `topics` and refresh nightly or on `/topics refresh`.
@@ -512,7 +569,7 @@ Base path `/api/v1`. All requests are JSON. The Gateway authenticates with a sha
 | GET | `/groups/{id}/decisions` | Query: `topic`, `from`, `to` | FR-DEC-3 |
 | GET | `/groups/{id}/topics` | Query: `from`, `to`, `refresh` | FR-TOP-3 |
 | DELETE | `/groups/{id}` | Purge group data | Privacy |
-| GET | `/health` | Health of API, DB, vector store, Ollama | NFR |
+| GET | `/health` | Health of API, DB, vector store, Gemini API key/reachability | NFR |
 
 **Ask response example**
 
@@ -539,9 +596,11 @@ All tunables live in `config.yaml` with environment overrides (`.env`). Key sett
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `LLM_MODEL` | `qwen2.5:7b-instruct-q4_K_M` | Ollama model tag |
-| `LLM_TEMPERATURE` | 0.1 | Generation determinism |
-| `LLM_CTX` | 8192 | Context window |
+| `LLM_PROVIDER` | `gemini` | Chat model provider used by the `app/llm/` factory |
+| `LLM_MODEL` | `gemini-3.5-flash-lite` | Gemini model ID |
+| `LLM_TEMPERATURE` | 0.1 | Generation determinism (ignored by `gemini-3.5-flash-lite`, which uses fixed sampling defaults; kept for models that accept it) |
+| `LLM_MAX_TOKENS` | 400 | Max output tokens for answers |
+| `LLM_THINKING_LEVEL` | `low` | Gemini 3 thinking level (`minimal`/`low`/`medium`/`high`); lower is faster |
 | `EMBED_MODEL` | `BAAI/bge-m3` | Embedding model |
 | `RERANKER_ENABLED` | true | Toggle reranker |
 | `CHUNK_GAP_MINUTES` | 30 | Conversation split gap |
@@ -552,6 +611,12 @@ All tunables live in `config.yaml` with environment overrides (`.env`). Key sett
 | `ACTION_MIN_CONFIDENCE` | 0.6 | Extraction filter |
 | `TIMEZONE` | `Asia/Kolkata` | Date resolution |
 | `RATE_LIMIT_PER_MIN` | 10 | Per-user limit |
+| `GOOGLE_API_KEY` | (secret, `.env`) | Gemini API key |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Cross-encoder used by the rerank runnable |
+| `RERANK_TOP_N` | 20 | Candidates passed to the reranker |
+| `RRF_K` | 60 | RRF constant |
+| `CHROMA_DIR` | `data/chroma_data` | Persistent Chroma directory |
+| `LANGSMITH_TRACING` | `false` | Must stay off (privacy, see 10) |
 
 ---
 
@@ -561,7 +626,7 @@ All tunables live in `config.yaml` with environment overrides (`.env`). Key sett
 | --- | --- |
 | WhatsApp session drops | Auto-reconnect with backoff; alert in logs; QR re-auth flow documented |
 | Core API unavailable | Gateway buffers events in a local outbox and retries |
-| Ollama timeout or OOM | Retry once; fall back to a smaller model if configured; return a friendly error |
+| Gemini timeout, rate limit (429), or `503 UNAVAILABLE` ("high demand", seen on the free tier) | Retry with exponential backoff (`max_retries`); then return a friendly "try again shortly" error (no fallback model) |
 | Malformed LLM JSON | Pydantic validation, one retry with correction hint, then skip and log |
 | Embedding job failure | Job retried up to 3 times; chunk marked `failed` for manual review |
 | Unparseable export file | Return which line/pattern failed and supported format examples |
@@ -578,6 +643,8 @@ All jobs are idempotent so retries are safe. The relational DB is the source of 
 - **Gateway to API auth:** shared-secret header; services bound to the internal Docker network only.
 - **Access control:** every endpoint that reads group data verifies membership of the requesting user.
 - **Data protection:** phone numbers stored as salted hashes; display names kept only for presentation; raw exports deleted after import.
+- **Cloud LLM:** only the prompt for each call (question plus at most `FINAL_TOP_K` excerpts, or a summary/extraction segment) is sent to the Gemini API. Embeddings, vector and keyword indexes, and the reranker stay local. The Gemini free tier allows Google to use prompts to improve its products, so the free tier is used **only with synthetic or anonymized chats**; real group data requires the paid tier.
+- **No external tracing:** LangSmith / LangChain tracing is disabled (`LANGSMITH_TRACING=false`, no `LANGSMITH_API_KEY`); chain telemetry goes only to the local `query_logs` table via a callback handler.
 - **Prompt injection:** chat text is treated as untrusted data. Prompts place chat content inside clearly delimited blocks, and system instructions state that instructions found in excerpts must be ignored. Command parsing happens in code, not by the LLM.
 - **Logging:** query logs store chunk IDs rather than full message text where possible; logs excluded from version control.
 - **Disk:** recommend an encrypted disk or volume for the data directory.
@@ -595,7 +662,7 @@ All jobs are idempotent so retries are safe. The relational DB is the source of 
 | Live message to searchable | <= 60 s | Micro-batching |
 | Topic clustering (10,000 messages) | <= 2 min | Precomputed embeddings |
 
-**Optimization measures:** embedding batching, caching of query embeddings, keeping the Ollama model loaded (`keep_alive`), streaming not required for WhatsApp, optional LLM-call skipping for the rewrite step on short English queries, and quantized models.
+**Optimization measures:** embedding batching, caching of query embeddings, low `thinking_level` for latency-sensitive calls, streaming not required for WhatsApp, optional LLM-call skipping for the rewrite step on short English queries, and quantized models.
 
 ---
 
@@ -605,7 +672,7 @@ All jobs are idempotent so retries are safe. The relational DB is the source of 
 | --- | --- | --- |
 | Unit | Parser formats, cleaner, Hinglish normalizer, chunker, time parser, RRF, schema validation | pytest |
 | Integration | Ingestion to index to query with a fixture chat; API endpoints | pytest + httpx |
-| Pipeline / LLM | Golden-question tests with expected source chunks; prompt regression tests with a mocked LLM and a real LLM run | pytest, custom harness |
+| Pipeline / LLM | Golden-question tests with expected source chunks; prompt regression tests with a mocked LLM and a real LLM run | pytest, custom harness; LangChain `GenericFakeChatModel` / `FakeListChatModel` and fake embeddings for the mocked runs |
 | Gateway | Command parsing, message splitting, reconnect logic with a mocked client | Jest |
 | End-to-end | Real WhatsApp test group scripted session | Manual checklist plus screen recording |
 | Performance | Latency and memory benchmarks | Locust or custom timing scripts |
@@ -629,6 +696,7 @@ Target unit-test coverage for core modules: 70% or higher.
 The evaluation harness is a standalone package (`/eval`) that runs against the same pipeline code.
 
 - **Datasets:** `qa.jsonl` (question, gold chunk or message IDs, language tag), `actions.jsonl`, `decisions.jsonl`, `summaries.jsonl`.
+- **Pipeline reuse:** the eval imports the same LangChain runnables from `api/app/query/`; ablations swap individual stages (e.g., rewrite, rerank) for passthrough runnables instead of maintaining a separate pipeline.
 - **Retrieval benchmark:** runs configurations (BM25 only, vector only, hybrid, hybrid + rerank, with and without rewrite) and reports Recall@1/3/5/10, MRR, nDCG.
 - **Generation benchmark:** faithfulness scored with a rubric prompt to a judge model plus a manual check on a sample; no-answer accuracy on out-of-scope questions.
 - **Extraction benchmark:** precision, recall, F1 using fuzzy match of task text and exact match of owner and date.
@@ -642,7 +710,7 @@ The evaluation harness is a standalone package (`/eval`) that runs against the s
 
 ### 14.1 Docker Compose services
 
-`gateway`, `api`, `worker`, `redis`, `ollama`, and optionally `postgres`. Volumes: `wa_session`, `chroma_data`, `db_data`, `ollama_models`. GPU access is enabled for `ollama`, `api`, and `worker` via the NVIDIA runtime when available.
+`gateway`, `api`, `worker`, `redis`, and optionally `postgres`. Volumes: `wa_session`, `chroma_data`, `db_data`. GPU access (optional) is enabled for `api` and `worker` (embeddings, reranker) via the NVIDIA runtime when available.
 
 ### 14.2 Repository layout
 
@@ -652,20 +720,26 @@ whatsapp-rag/
     src/adapters/
     src/commands/
   api/
+    requirements.txt
     app/main.py
-    app/routers/
-    app/ingestion/    # parser, cleaner
-    app/indexing/     # chunker, embedder, vector_store
-    app/query/        # intent, time_parser, rewriter, retriever, reranker, answerer
-    app/summarize/
-    app/extract/      # actions, decisions
-    app/topics/
-    app/models/       # SQLAlchemy models, schemas
-    app/prompts/      # versioned prompt templates
     app/config.py
-  worker/
+    app/routers/      # FastAPI routers (events, groups, ask, summary, tasks, decisions, topics, health)
+    app/llm/          # LangChain factories: ChatGoogleGenerativeAI, HuggingFaceEmbeddings, cross-encoder; callback handler
+    app/db/           # SQLAlchemy engine/session, FTS5 setup, Alembic migrations
+    app/ingestion/    # export parser (optional BaseLoader), cleaner, Hinglish normalizer, dedup
+    app/indexing/     # chunker -> Documents, Chroma vector store helper, FTS5Retriever
+    app/query/        # LCEL runnables: intent, time_parser, rewriter, hybrid retriever + RRF, reranker, answerer
+    app/summarize/    # map-reduce LCEL chains
+    app/extract/      # action item and decision extraction chains (structured output)
+    app/topics/       # clustering + label chain
+    app/models/       # SQLAlchemy models; Pydantic schemas (API + structured-output schemas)
+    app/prompts/      # versioned prompt files loaded into ChatPromptTemplate
+    tests/            # pytest: unit, integration, chain tests with fake LLM
+  worker/             # RQ worker entrypoint; reuses api/app chains
   eval/
-  data/               # sample/synthetic chats (anonymized)
+    datasets/         # qa.jsonl, actions.jsonl, decisions.jsonl, summaries.jsonl
+    results/          # git-ignored benchmark outputs
+  data/               # sample/synthetic chats (anonymized); raw/ and chroma_data/ git-ignored
   docs/               # PRD, TRD, report
   docker-compose.yml
   Makefile
@@ -685,7 +759,7 @@ whatsapp-rag/
 | Risk | Mitigation |
 | --- | --- |
 | Unofficial library breaks or account is banned | Adapter interface, pinned versions, spare number, `.txt` import as backup demo path |
-| 7B model produces weak Hinglish output | Test Qwen, Llama, Gemma on the dev set; allow model switch via config; add few-shot examples |
+| LLM produces weak Hinglish output | Compare Gemini 3.5 Flash-Lite vs 3.8 Flash on the dev set; allow model switch via config; add few-shot examples |
 | Hinglish spelling variance reduces recall | Normalization dictionary, BGE-M3, BM25 fuzzy variants, query expansion |
 | LLM-based extraction yields many false positives | Confidence filter, negative few-shot examples, evaluation on labeled data, user confirmation for suggested completions |
 | GPU memory contention between LLM and embedding models | Sequential model usage, CPU offload for reranker, smaller quantization |
@@ -701,7 +775,7 @@ whatsapp-rag/
 | --- | --- |
 | FR-ING (ingestion) | 5.1, 5.2, 6.1 |
 | FR-IDX (indexing) | 5.3, 5.4, 5.5, 6.2 |
-| FR-QA (search and Q&A) | 5.6 |
+| FR-QA (search and Q&A) | 2.5, 5.6 |
 | FR-TIME (time filters) | 5.7 |
 | FR-SUM (summaries) | 5.8 |
 | FR-ACT (action items) | 5.9 |
@@ -717,9 +791,11 @@ whatsapp-rag/
 
 ## 17. Open Technical Decisions
 
-1. Final LLM choice after benchmarking Qwen2.5-7B, Llama-3.1-8B, and Gemma-2-9B on the Hinglish dev set.
+1. ~~Final LLM choice~~ Decided: Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`) via the Gemini API, no local fallback. Chat excerpts sent to the LLM leave the machine (see 10). `gemini-3.8-flash` was tried first and dropped on 2026-10-24: on the free (standard) tier its server time was about 123 s for a 14-token reply (`server-timing` header), against 2.6 s for Flash-Lite with the same key, prompt and network. Re-measure 3.8 Flash in the Phase 9 eval.
 2. SQLite FTS5 versus rank\_bm25 for the keyword index (FTS5 preferred for persistence; confirm tokenizer behavior on Hinglish).
 3. Whether the reranker fits within hardware limits, or is replaced by a lighter cross-encoder.
 4. RQ versus Celery for background jobs (RQ is simpler and sufficient at this scale).
 5. Whether to use a PostgreSQL service for the demo or stay on SQLite.
 6. Confirmed hardware profile (A, B, or C from Section 4.1).
+7. Exact LangChain package versions to pin (verify that `ChatGoogleGenerativeAI.with_structured_output` JSON-schema mode works with the chosen model).
+8. Whether to adopt LangGraph later for follow-up memory (FR-QA-9) or multi-step summarization, or stay with plain LCEL (current choice).

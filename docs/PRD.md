@@ -37,7 +37,7 @@ A group member should be able to ask the chat a question the way they would ask 
 - G5: Support time-aware queries ("last week", "in March", "yesterday").
 - G6: Cluster messages into topics and show what the group discusses most.
 - G7: Handle Hinglish and mixed-language chat as a first-class use case.
-- G8: Run entirely on local open-source models, with the option to upgrade later.
+- G8: Keep chat storage, indexing, and retrieval local; use a cloud LLM (Gemini 3.5 Flash-Lite) only for generation.
 
 ### 2.2 Non-goals (v1)
 
@@ -246,13 +246,13 @@ Natural-language equivalents (e.g., "summarize karo") should map to these comman
 | --- | --- |
 | **Performance** | Q&A under 10 s; 200-message summary under 30 s; indexing 10,000 messages under 10 minutes on target hardware. |
 | **Accuracy** | Answers must be grounded; hallucination rate tracked and reported. |
-| **Privacy** | All processing local; no chat content sent to external services in v1. |
+| **Privacy** | Storage, embeddings, and retrieval run locally. Only the minimal prompt (question plus top retrieved excerpts) is sent to the Gemini API; free tier used only with synthetic/anonymized data. |
 | **Security** | Group isolation enforced at query time; bot answers only for verified members; data stored on local encrypted disk where possible. |
 | **Reliability** | Bot reconnects automatically after session drop; message capture queue survives restart. |
 | **Scalability** | Support at least 5 groups and 100,000 messages in total for demo. |
-| **Maintainability** | Modular services; config-driven model choice; documented APIs. |
-| **Portability** | Models and DB swappable (e.g., Ollama model name in config; vector DB behind an interface). |
-| **Observability** | Log each query with retrieved chunks, latency, and model used, for debugging and evaluation. |
+| **Maintainability** | Modular services; config-driven model choice; documented APIs; every pipeline built from composable LangChain runnables. |
+| **Portability** | Models and DB swappable through LangChain's standard interfaces (chat model, embeddings, vector store, retriever), e.g., Gemini model name in config, Chroma replaceable by Qdrant. |
+| **Observability** | Log each query with retrieved chunks, latency, and model used, for debugging and evaluation (via LangChain callbacks written to the local DB; hosted tracing such as LangSmith stays off to honor the privacy requirement). |
 
 ---
 
@@ -267,7 +267,7 @@ WhatsApp Group
 Bot Gateway (Node.js: whatsapp-web.js / Baileys)
      |  REST / queue
      v
-Backend API (Python, FastAPI)
+Backend API (Python, FastAPI; pipelines orchestrated with LangChain)
      |
      +--> Ingestion: parser, cleaner, dedup
      +--> Indexing: chunker -> embedder -> Vector DB + BM25 index
@@ -279,7 +279,7 @@ Backend API (Python, FastAPI)
      v
 Storage: SQLite/PostgreSQL (messages, tasks, decisions, users) + Chroma/Qdrant (vectors)
      |
-Local LLM runtime: Ollama
+LLM: Google Gemini API (Gemini 3.5 Flash-Lite)
 ```
 
 ### 9.2 Components
@@ -322,14 +322,13 @@ Local LLM runtime: Ollama
 | --- | --- | --- |
 | Bot gateway | Node.js + whatsapp-web.js | Baileys |
 | Backend | Python 3.11 + FastAPI | Flask |
-| LLM runtime | Ollama | llama.cpp, vLLM |
-| LLM | Qwen2.5 7B Instruct | Llama 3.1 8B, Gemma 2 9B |
+| LLM | Gemini 3.5 Flash-Lite (Gemini API) | Gemini 3.8 Flash |
 | Embeddings | BGE-M3 | multilingual-e5-large |
 | Reranker | bge-reranker-v2-m3 | cross-encoder MiniLM |
 | Vector DB | ChromaDB | Qdrant, FAISS |
 | Keyword search | rank\_bm25 | SQLite FTS5 |
 | Relational DB | SQLite (dev), PostgreSQL (optional) |  |
-| Orchestration | LangChain or LlamaIndex (thin use), or plain Python |  |
+| Orchestration | LangChain (LCEL runnables, `langchain-google-genai`, `langchain-chroma`, `langchain-huggingface`) | LlamaIndex, plain Python |
 | Date parsing | dateparser + custom Hinglish rules |  |
 | Topic modeling | BERTopic (UMAP + HDBSCAN) | KMeans + c-TF-IDF |
 | Charts | matplotlib / plotly |  |
@@ -397,7 +396,7 @@ A dedicated evaluation module is a core deliverable and a major viva asset.
 - Effect of chunking strategy (single message vs window vs time-gap).
 - Effect of query rewriting.
 - Effect of reranking.
-- Different local LLMs (Qwen vs Llama vs Gemma).
+- Different LLMs (Gemini 3.5 Flash-Lite vs 3.8 Flash).
 
 ---
 
@@ -433,7 +432,7 @@ A dedicated evaluation module is a core deliverable and a major viva asset.
 
 | Phase | Weeks | Deliverables |
 | --- | --- | --- |
-| 1. Foundation | 1-2 | Finalize PRD, set up repo, environment, Ollama, chat parser, synthetic dataset plan |
+| 1. Foundation | 1-2 | Finalize PRD, set up repo, environment, Gemini API access, chat parser, synthetic dataset plan |
 | 2. Ingestion and indexing | 3-4 | Parser for Android/iOS formats, cleaning, chunking, embeddings, vector DB, BM25 |
 | 3. Core RAG | 5-6 | Hybrid retrieval, reranking, answer generation with citations, no-answer handling |
 | 4. Bot integration | 7-8 | WhatsApp gateway, commands, `/ask`, `/import`, `/help`. **Scope freeze.** |
@@ -497,3 +496,5 @@ Voice note transcription (Whisper), daily digests, image and document understand
 - **Reranker:** a model that rescores retrieved results for relevance.
 - **Hinglish:** Hindi written in Roman script mixed with English.
 - **Map-reduce summarization:** summarize parts separately, then summarize the summaries.
+- **LangChain:** a Python framework that provides standard interfaces for LLMs, embeddings, vector stores, and retrievers, plus a way to compose them into pipelines.
+- **LCEL:** LangChain Expression Language; pipelines written as `prompt | model | parser` chains of runnables.

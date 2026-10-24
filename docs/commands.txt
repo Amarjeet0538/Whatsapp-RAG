@@ -1,0 +1,5 @@
+remove git keep files
+
+```
+find . -name ".gitkeep" -not -path "./.git/*" -not -path "./.venv/*" -exec git rm {} \;
+```

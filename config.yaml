@@ -1,0 +1,16 @@
+llm_provider: "gemini"
+llm_model: "gemini-3.5-flash-lite"
+llm_temperature: 0.1  # ignored by gemini-3.5-flash-lite (fixed sampling)
+llm_max_tokens: 400
+llm_thinking_level: "low"
+embed_model: "BAAI/bge-m3"
+reranker_enabled: true
+chunk_gap_minutes: 30
+window_size: 10
+window_overlap: 3
+vector_top_k: 20
+bm25_top_k: 20
+final_top_k: 5
+action_min_confidence: 0.6
+timezone: "Asia/Kolkata"
+rate_limit_per_min: 10
