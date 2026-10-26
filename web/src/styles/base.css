@@ -1,0 +1,148 @@
+@import "@fontsource/source-serif-4/500.css";
+@import "@fontsource/source-serif-4/600.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Chat text is untrusted and can contain long unbroken strings or URLs. */
+.chat-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shared control styles */
+.btn {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  border-radius: var(--r);
+  padding: 6px 12px;
+  font-size: var(--t-sm);
+  font-weight: 500;
+  transition: border-color var(--ease), background-color var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-primary:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+}
+
+.field {
+  display: grid;
+  gap: var(--s1);
+  font-size: var(--t-sm);
+  font-weight: 500;
+}
+
+.input {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  border-radius: var(--r);
+  padding: 7px 10px;
+  font-weight: 400;
+  width: 100%;
+}
+
+.hint {
+  color: var(--ink-muted);
+  font-size: var(--t-sm);
+  font-weight: 400;
+}
+
+.error {
+  color: var(--danger);
+  font-size: var(--t-sm);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

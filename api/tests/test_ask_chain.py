@@ -42,6 +42,15 @@ def ask(Session, group_id, emb, chroma_dir, llm, reranker):
     return chain.invoke({"question": "client ne payment kab bola?"})
 
 
+def test_sources_carry_the_excerpt_number_the_llm_cited(
+    Session, group_id, bow_embeddings, chroma_dir
+):
+    # The UI maps an inline [n] to the source whose excerpt is n, not to sources[n-1].
+    llm = FakeListChatModel(responses=["Paisa 20 tarikh tak aayega [3].\nSOURCES: [3, 1]"])
+    out = ask(Session, group_id, bow_embeddings, chroma_dir, llm, OverlapReranker())
+    assert [s["excerpt"] for s in out["sources"]] == [3, 1]
+
+
 def test_grounded_answer_cites_the_source_message(Session, group_id, bow_embeddings, chroma_dir):
     llm = FakeListChatModel(
         responses=["Pehli installment ka paisa 20 tarikh tak aayega.\nSOURCES: [1]"]

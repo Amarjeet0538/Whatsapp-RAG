@@ -2,7 +2,7 @@
 
 A step-by-step build order for the WhatsApp group-chat RAG assistant. `PRD.md` says what to build and `TRD.md` says how. This file sets the order and gives each step a "done when" check. `TODO.md` holds the detailed checklist for the current phase.
 
-> **You are here: MVP done (2026-10-24). Next: Phase 4, Step 4.1 (gateway)**. The HTTP RAG loop works end to end: import a `.txt` export, then `POST /ask` returns a grounded answer with citations, or not-found. Open items from Phases 1-3 are marked `[~]` below.
+> **You are here: Phases 1-3 done, including the Step 3.8 web demo UI (browser check passed 2026-10-27). Next: Phase 4, Step 4.1 (gateway)**. The HTTP RAG loop works end to end: import a `.txt` export, then `POST /ask` returns a grounded answer with citations, or not-found. A local web UI (`make run` + `make web`) now covers import, chat, citation context, and a pipeline trace. Open items from Phases 1-3 are marked `[~]` below.
 >
 > MVP check against the real stack (BGE-M3 + reranker on the RTX 3050, Gemini 3.5 Flash-Lite): 5 of 5 sample questions answered with the correct cited message, the out-of-scope question returned not-found, a non-member got 403, re-import added 0 messages, and latency was 3.0-6.5 s. 56 tests pass.
 
@@ -121,6 +121,12 @@ Phases follow the 16-week timeline in PRD §15. Scope freezes at the end of Phas
 ### 3.7 [~] First golden tests
 - Fake-LLM chain tests for found / not-found. Start `eval/datasets/qa.jsonl` with about 20 labeled questions.
 - Status: the fake-LLM chain tests are done (`api/tests/test_ask_chain.py`). `qa.jsonl` is not started.
+
+### 3.8 [x] Web demo UI (Decisions D-23 to D-28; resolves PRD §479)
+- `web/`: React + Vite + TS. Three columns: chats, conversation with numbered citations, pipeline trace. Import dialog, "Ask as" member picker, citation context overlay, Ledger light/dark theme.
+- API additions: `GET /groups`, `GET /groups/{id}/members`, `GET /groups/{id}/messages/{mid}/context`, `Source.message_id`, `AskResponse.trace`.
+- Spec `docs/superpowers/specs/2026-10-26-web-demo-design.md`; plan `docs/superpowers/plans/2026-10-26-web-demo.md`.
+- **Done when:** with `make run` + `make web`, importing the sample, asking a found and a not-found question, opening a citation, and reading the trace all work in a real browser at 1440, 1000 and 400 px in both themes. ✔ 71 API tests, 21 web tests, typecheck and build pass; final review fixes applied. Browser pass confirmed by the user (2026-10-27).
 
 ---
 

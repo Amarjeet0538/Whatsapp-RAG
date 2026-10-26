@@ -203,3 +203,41 @@ _Records D-01 to D-22 were written retroactively on 2026-10-25, covering work up
   - Whole-word replacements from `hinglish_norm.yaml`.
   - Ambiguous variants removed: `h`, `ha` (laughter), `hain`.
 - **Why:** Amounts, dates, and distinct words must survive cleaning, and a wrong merge hurts recall more than a missed variant.
+
+### D-23: A local web demo UI before the WhatsApp gateway (ROADMAP step 3.8)
+- **Context & problem:** The project needs something examiners can see and use during evaluation. PRD §479 left "minimal web dashboard?" open, and the roadmap's next step was the gateway (4.1).
+- **Options:** go straight to the gateway; a dev console (curl replacement); a product-grade web app replacing the bot; a local single-user demo UI.
+- **Chosen:** A local, single-user demo UI: import, group switcher, chat with citations, citation context, and a pipeline inspector. The gateway stays next after it.
+- **Why:** The user's stated goal (demo for evaluation). The inspector also makes the RAG stages explainable in a viva. Non-goals recorded in the spec: streaming, follow-up memory, persisted history, multi-user auth.
+- **Spec:** `docs/superpowers/specs/2026-10-26-web-demo-design.md`.
+
+### D-24: React + Vite + TypeScript, CSS Modules, no UI library
+- **Context & problem:** Pick a frontend stack for a local demo that must not look templated (user rules: no gradients, pill buttons, emoji, em dashes, invented metrics).
+- **Options:** Next.js (SSR and a Node server the demo doesn't need); FastAPI + Jinja/HTMX (one process, less of an app feel); SvelteKit (less familiar to examiners); React + Vite.
+- **Chosen:** React 18 + Vite 5 + strict TypeScript; CSS Modules over one `tokens.css` ("Ledger": warm paper, Source Serif 4 headings and answers, IBM Plex Sans/Mono, one deep green accent; light and dark). Fonts are bundled via `@fontsource`. No component library, no Tailwind, no state library.
+- **Why:** The simplest SPA to explain and run. Hand-built components are the most direct way to avoid the generic look a kit brings. Bundled fonts mean the UI works offline. Exact version pins match D-20.
+
+### D-25: The API key is injected by the Vite proxy, not stored in the browser
+- **Context & problem:** Every `/groups/*` route needs `X-API-Key`; anything shipped to a browser is readable.
+- **Options:** user pastes the key into the UI (localStorage); FastAPI serves the built UI with a separate browser auth path; a dev-server proxy adds the header.
+- **Chosen:** `web/vite.config.ts` reads `API_KEY` from the root `.env` with `loadEnv` and sets the header on the `/api` proxy (for both `vite` and `vite preview`). The demo runs as two processes: `make run` + `make web`.
+- **Why:** The key never reaches client code or the bundle (verified by grepping `dist/`), with no new auth code in the API. Cost: no single-process deployment; acceptable for a local demo.
+
+### D-26: Group and member lists are operator-level; message text stays membership-checked
+- **Context & problem:** The UI needs a group list and an "Ask as" picker, but CLAUDE.md requires membership checks on endpoints that read group data, and there is no logged-in user in a local demo.
+- **Options:** require a `user_id` on the list endpoints too (the picker can't know one before listing members); a login screen; treat lists as operator views.
+- **Chosen:** `GET /groups` and `GET /groups/{id}/members` return names and counts only, gated by the API key. Endpoints that return message text (`ask`, `messages/{id}/context`) go through one shared `resolve_member()`, so they enforce membership identically.
+- **Why:** The API key holder is the operator who imported the chats, so names and counts tell them nothing new; message text stays behind membership. Architecture boundary 9 was amended to say this precisely.
+
+### D-27: The ask trace comes from splitting retrieval into `hits` then `candidates`
+- **Context & problem:** The inspector needs per-source hit counts, but `hybrid_retrieve` returned only the RRF merge.
+- **Options:** re-run retrieval for the trace (double cost, could differ); a LangChain callback handler collecting intermediate outputs; keep raw lists in the chain state.
+- **Chosen:** `assign(hits=retrieve_lists) | assign(candidates=merge)`. A pure `build_trace()` (`app/query/trace.py`) builds the trace from chain state in `attach_citations`. `gated` reuses the branch predicate `below_min_relevance`. The trace is returned in `AskResponse` and never logged.
+- **Why:** No extra work per request, stage order unchanged (eval ablations still swap one stage), and the trace function is unit-testable without models. Scores stay raw logits; the UI labels them so (`min_relevance` is -8.0, so 0-1 framing would mislead).
+
+### D-28: Citation context is a membership-checked window endpoint
+- **Context & problem:** Showing only a 200-char snippet doesn't prove grounding; examiners want to see the cited message in its conversation.
+- **Options:** expand the snippet only; return surrounding messages in every `/ask` response; a separate endpoint fetched on click.
+- **Chosen:** `GET /groups/{id}/messages/{message_id}/context?user_id&window` (1-20, default 5), ordered by `(ts, id)` so messages in the same minute keep a stable order, excluding system messages. `Source` gained `message_id`.
+- **Addendum (final review):** `Source` also carries `excerpt`, the `[n]` the LLM used. The UI resolves an inline `[n]` to the source whose `excerpt` is n, never to `sources[n-1]`: the LLM may cite excerpts 2 and 5, and `pick_citations` skips chunks whose messages were already cited, so list position and excerpt number differ. `answer_v1` doesn't ask for inline markers, so most answers show only the source list; a prompt asking for them would be `answer_v2`.
+- **Why:** Only fetched when a citation is opened, so `/ask` stays small. 404 `MESSAGE_NOT_FOUND` covers missing, system, and other-group ids alike, so the endpoint doesn't reveal whether an id exists in another group.

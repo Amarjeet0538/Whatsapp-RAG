@@ -1,0 +1,76 @@
+.app {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 340px;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.sidebar,
+.main,
+.inspector {
+  min-height: 0;
+  min-width: 0;
+}
+
+.main {
+  background: var(--surface);
+}
+
+.inspector {
+  border-left: 1px solid var(--rule);
+  background: var(--surface-sunk);
+}
+
+.notice {
+  display: grid;
+  gap: var(--s3);
+  justify-items: start;
+  max-width: 34rem;
+  padding: var(--s6) var(--s5);
+}
+
+.noticeTitle {
+  font-size: var(--t-2xl);
+}
+
+/* Narrow laptops: the trace becomes a drawer opened from the chat header. */
+@media (max-width: 1099px) {
+  .app {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .inspector {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(360px, 100vw);
+    z-index: 10;
+    transform: translateX(100%);
+    visibility: hidden;
+    transition:
+      transform 180ms ease-out,
+      visibility 0s linear 180ms;
+  }
+
+  .open {
+    transform: none;
+    visibility: visible;
+    transition: transform 180ms ease-out;
+    box-shadow: -1px 0 0 var(--rule);
+  }
+}
+
+/* Phones: the sidebar is replaced by a chat select in the header. */
+@media (max-width: 719px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .notice {
+    padding: var(--s5) var(--s4);
+  }
+}

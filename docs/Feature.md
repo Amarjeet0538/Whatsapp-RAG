@@ -17,6 +17,7 @@ _FEAT-01 to FEAT-04 were backfilled on 2026-10-25. Commit refs: `7a59a51` (skele
 | FEAT-03 | HTTP RAG MVP: import + ask with citations | Phases 1-3 | Done (with open items) |
 | FEAT-04 | Living documentation set | — | Done |
 | FEAT-05 | WhatsApp gateway | 4.1 | **Next**, not started |
+| FEAT-06 | Web demo UI | 3.8 | Done (not committed) |
 
 ---
 
@@ -73,6 +74,27 @@ _FEAT-01 to FEAT-04 were backfilled on 2026-10-25. Commit refs: `7a59a51` (skele
 - **Investigation / Steps:** Re-read the code (every module's functions and routes), git history (`7a59a51`, `b90736a`, `cdb5191`), the working tree, and the existing docs. Where a doc claim went beyond the evidence, I reworded it (for example, only reranking had been timed, not retrieval).
 - **Resolution:** Created `docs/Architecture.md`, `docs/Flow.md`, `docs/Decisions.md` (D-01 to D-22), `docs/Bug.md` (BUG-01 to BUG-11), and `docs/Feature.md` (this file). Found one inconsistency: CLAUDE.md says query logs go "through a callback handler" while the code logs from the endpoint (D-17). It's flagged to the user and still open.
 - **Status:** Done (2026-10-25).
+
+### FEAT-06: Web demo UI (ROADMAP 3.8)
+- **Context:** The user wants a visible, modern frontend to chat with the assistant for the final-year evaluation, with strict rules against generic AI-made design (no purple gradients, pill buttons, fake reviews or metrics, vague hero text, emoji, em dashes, over-the-top animation).
+- **Investigation / Steps:**
+  - Brainstormed with the user (AskUserQuestion + browser mockups): purpose = evaluation demo; screens = import, group switcher, chat with citations, pipeline inspector; React + Vite + TS; proxy-injected key with an "Ask as" member picker; per-tab history; no streaming; citation opens surrounding messages; light + dark; two processes. Layout A (three columns, inspector always visible) and style "Ledger" picked from mockups.
+  - Spec `docs/superpowers/specs/2026-10-26-web-demo-design.md`, plan `docs/superpowers/plans/2026-10-26-web-demo.md` (8 tasks, TDD).
+  - Backend: `GET /groups`, `GET /groups/{id}/members`, context endpoint, `Source.message_id`, `trace` on `/ask` (D-26, D-27, D-28). The plan's member counts (16/7) were wrong: the sample's `<Media omitted>` and deleted message are system messages, so the counts are 15/6.
+  - Frontend: `web/` (D-24, D-25). Component tests for AnswerBlock and InspectorPane were run red against null stubs before the components were written.
+- **Blockers:**
+  - `npm install` could not reach the registry from the Claude Code sandbox (TLS EOF), and an unsandboxed retry was denied. The user ran the install in their own terminal (with `--dns-result-order=ipv4first`) and approved esbuild's install script.
+  - The sandbox also blocks loopback, and browser tools were declined, so the real-browser check is handed to the user (checklist in the final report).
+- **Resolution (files):** `api/app/routers/groups.py`, `api/app/models/schemas.py`, `api/app/query/{chain,citations,trace}.py`, `api/tests/{test_api,test_query_units}.py`, `web/**`, `Makefile` (`web-install`, `web`, `web-test`), `.gitignore`.
+- **Final review (fresh Opus reviewer):** fixed, each with a test run red first:
+  - A late answer overwrote another group's thread after a group switch (Critical). Fixed with the `useThreads` per-group store, where every update names its group.
+  - `[n]` was mapped by list position. Fixed with `Source.excerpt`.
+  - A plain-text 500 was shown as "API not reachable". It now reports "The API failed with status N".
+  - The context panel didn't trap focus. It is now a native modal `<dialog>`, which also fixed the double-Esc and the focus jump.
+  - The import dialog kept the last group ID, which would merge a new export into the old group. It now resets each time it opens.
+  - Deferred minors: the inspector's "Reranker off" label is wrong for zero candidates; Esc closes the import dialog mid-import; there is no end-of-chat context test.
+- **Verification:** `pytest -q` 71 passed; ruff + black clean; `vitest` 21/21; `tsc --noEmit` clean; `vite build` OK; built bundle contains no API key or `X-API-Key` header. Real-browser pass done by the user (2026-10-27).
+- **Status:** Done (2026-10-27). Not committed (CLAUDE.md).
 
 ### FEAT-05: WhatsApp gateway (ROADMAP 4.1), next
 - **Context:** Phase 4 connects the MVP to real WhatsApp (FR-ING-4, FR-BOT-*).

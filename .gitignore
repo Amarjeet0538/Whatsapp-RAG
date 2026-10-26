@@ -29,4 +29,6 @@ node_modules/
 
 .claude/
 .axiomcode/
+.superpowers/
+web/dist/
 CLAUDE.md 

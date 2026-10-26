@@ -1,0 +1,93 @@
+.block {
+  display: grid;
+  gap: var(--s4);
+}
+
+/* The one expressive element: answers read like a written note. */
+.answer {
+  font-family: var(--font-serif);
+  font-size: var(--t-lg);
+  font-weight: 500;
+  line-height: 1.6;
+  max-width: 38rem;
+}
+
+.notFound {
+  color: var(--ink-muted);
+}
+
+.marker {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  margin: 0 2px;
+  padding: 0 3px;
+  vertical-align: 0.15em;
+  border: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.marker:hover {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s2);
+}
+
+.source {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: var(--s2);
+  width: 100%;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: var(--s2) var(--s3);
+  font-size: var(--t-sm);
+  transition: border-color var(--ease);
+}
+
+.source:hover {
+  border-color: var(--accent);
+}
+
+.num {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.sourceBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sourceMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  align-items: baseline;
+  color: var(--ink-muted);
+  font-size: var(--t-xs);
+}
+
+.sender {
+  color: var(--ink);
+  font-weight: 600;
+  font-size: var(--t-sm);
+}

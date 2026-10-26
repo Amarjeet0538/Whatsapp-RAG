@@ -17,9 +17,45 @@ class AskRequest(BaseModel):
 
 
 class Source(BaseModel):
+    message_id: int
+    excerpt: int  # the [n] the answer used for this source
     sender: str | None
     ts: str
     snippet: str
+
+
+class TraceQuery(BaseModel):
+    text: str
+    vector_hits: int
+
+
+class TraceRetrieval(BaseModel):
+    queries: list[TraceQuery]
+    fts_query: str
+    fts_hits: int
+    merged: int
+
+
+class TraceChunk(BaseModel):
+    chunk_id: int
+    start_ts: str
+    end_ts: str
+    participants: str
+    score: float | None  # raw cross-encoder logit, not a probability
+    preview: str
+    cited: bool
+
+
+class Trace(BaseModel):
+    rewrite: Rewrite
+    retrieval: TraceRetrieval
+    reranked: list[TraceChunk]
+    best_score: float | None
+    min_relevance: float
+    gated: bool
+    rerank_enabled: bool
+    prompt_version: str
+    latency_ms: int = 0
 
 
 class AskResponse(BaseModel):
@@ -28,9 +64,36 @@ class AskResponse(BaseModel):
     interpreted_range: dict | None = None
     sources: list[Source]
     latency_ms: int
+    trace: Trace
 
 
 class ImportResponse(BaseModel):
     group_id: int
     new_messages: int
     chunks: int
+
+
+class GroupSummary(BaseModel):
+    wa_group_id: str
+    name: str | None
+    message_count: int
+    member_count: int
+    last_message_ts: str | None
+
+
+class MemberSummary(BaseModel):
+    display_name: str
+    message_count: int
+
+
+class ContextMessage(BaseModel):
+    id: int
+    sender: str | None
+    ts: str
+    text: str
+    is_target: bool
+
+
+class ContextResponse(BaseModel):
+    target_id: int
+    messages: list[ContextMessage]

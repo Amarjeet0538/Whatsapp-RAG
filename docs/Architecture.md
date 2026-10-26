@@ -2,7 +2,7 @@
 
 The system map. Read this before making structural changes, and update it whenever a module, service, table, or boundary is added or changed. The specs are `PRD.md` (what) and `TRD.md` (how). The build order is `ROADMAP.md`, the reasoning behind choices is `Decisions.md`, and execution traces are `Flow.md`.
 
-_Last updated: 2026-10-25 (HTTP MVP, Phases 1-3)._
+_Last updated: 2026-10-26 (HTTP MVP, Phases 1-3, plus step 3.8 web demo UI)._
 
 ---
 
@@ -15,6 +15,8 @@ A WhatsApp group-chat assistant that answers questions over chat history using R
  WhatsApp  <──>  gateway/ (Node.js, whatsapp-web.js)
                       │  HTTP + X-API-Key
                       ▼
+ Browser ──► web/ (React SPA) ──► Vite dev proxy (:5173, adds X-API-Key)
+                                      │
  curl / tests ──► Core API (FastAPI, api/app, base path /api/v1)      ◄── built (MVP)
                       │
      ┌────────────────┼──────────────────────────┬─────────────────────────┐
@@ -28,7 +30,8 @@ A WhatsApp group-chat assistant that answers questions over chat history using R
 
 | Component | Runtime | Status | Notes |
 | --- | --- | --- | --- |
-| Core API | Python 3.12, FastAPI, LangChain (LCEL) | **Built** | Import, ask, health endpoints |
+| Core API | Python 3.12, FastAPI, LangChain (LCEL) | **Built** | Import, ask (+ trace), groups, members, context, health |
+| Web demo UI | React 18, Vite 5, TypeScript, CSS Modules | **Built** | `web/`; local single-user demo; key injected by the Vite proxy |
 | Relational DB | SQLite via SQLAlchemy 2.x | **Built** | `data/app.db`; tables via `create_all` (Alembic deferred) |
 | Keyword index | SQLite FTS5 table `chunks_fts` | **Built** | Derived from `chunks`; same DB file |
 | Vector index | ChromaDB (persistent, cosine) | **Built** | `data/chroma_data`, one collection per group |
@@ -75,13 +78,23 @@ Whatsapp_RAG/
 │   │   │   ├── rrf.py            rrf_merge()
 │   │   │   ├── rerank.py         rerank(): best score over query variants
 │   │   │   ├── answer.py         format_excerpts(), parse_answer(), NOT_FOUND constants
-│   │   │   └── citations.py      pick_citations(): best message per cited chunk
+│   │   │   ├── citations.py      pick_citations(): best message per cited chunk (+ message_id)
+│   │   │   └── trace.py          build_trace(): what the chain did, for the web inspector
 │   │   ├── prompts/              versioned YAML prompts (rewrite_v1, answer_v1) + load_prompt()
 │   │   ├── routers/
-│   │   │   ├── groups.py         POST /groups/{wa_group_id}/import, POST /groups/{wa_group_id}/ask
+│   │   │   ├── groups.py         import, ask, list groups, members, message context; resolve_member()
 │   │   │   └── health.py         GET /health
 │   │   ├── summarize/ extract/ topics/   placeholders (Phases 5, 7, 8)
 │   └── tests/                    pytest; fakes only (no network, no GPU)
+├── web/                          React + Vite demo UI (step 3.8)
+│   ├── vite.config.ts            /api proxy to :8000, adds X-API-Key read from ../.env
+│   ├── src/api.ts, types.ts      typed client (ApiError) and mirrors of the Pydantic schemas
+│   ├── src/citations.ts          splitCitations(): answer text → text / [n] marker segments
+│   ├── src/thread.ts, storage.ts per-tab chat thread in sessionStorage (try/catch wrapped)
+│   ├── src/components/           GroupSidebar, ImportDialog, ChatPane, AnswerBlock,
+│   │                             ContextPanel, InspectorPane, ThemeToggle
+│   ├── src/styles/               tokens.css (Ledger light/dark), base.css
+│   └── tests/                    vitest + Testing Library
 ├── gateway/ worker/ eval/        placeholders (Phases 4, 9)
 ├── data/
 │   ├── samples/                  synthetic Hinglish exports (committed)
@@ -110,8 +123,10 @@ Whatsapp_RAG/
    - Sender ids are stored as salted hashes, and phone-number display names are masked.
    - `query_logs` stores chunk ids, not chat text.
 8. **Untrusted chat text:** excerpts go to the LLM inside `<excerpt>` blocks, with a system rule to ignore any instructions found in them. FTS5 queries are built from quoted tokens, so user text can't inject FTS syntax.
-9. **Group isolation:** every endpoint that reads group data checks `memberships` for the requesting user. Each group has its own Chroma collection, and FTS5 queries filter on `group_id`.
+9. **Group isolation:** every endpoint that returns chat text (`ask`, `messages/{id}/context`) checks `memberships` for the requesting user through `resolve_member()`. `GET /groups` and `GET /groups/{id}/members` are operator-level views (names and counts, no message text) for the API key holder. Each group has its own Chroma collection, and FTS5 queries filter on `group_id`.
 10. **Auth:** every `/groups/*` route requires `X-API-Key` (compared in constant time). `/health` is open.
+11. **The browser never holds the API key.** `web/` talks only to the Vite dev server; its proxy adds `X-API-Key` server-side. No key in `web/src` or the built bundle. Chat text is rendered as React text (no `dangerouslySetInnerHTML`).
+12. **The ask trace is returned, never stored.** `AskResponse.trace` carries excerpt previews for the inspector; `query_logs` still stores chunk ids only.
 
 ---
 
@@ -147,9 +162,14 @@ Planned tables (TRD §6.1): `action_items`, `decisions`, `topics`.
 | --- | --- | --- | --- |
 | GET | `/api/v1/health` | none | `{status, db, vector_store, llm}`; `llm` checks only that the key is present |
 | POST | `/api/v1/groups/{wa_group_id}/import?name=` | X-API-Key | Multipart `.txt`; returns `{group_id, new_messages, chunks}` |
-| POST | `/api/v1/groups/{wa_group_id}/ask` | X-API-Key | `{question, user_id}` → `{answer, found, interpreted_range, sources[], latency_ms}` |
+| POST | `/api/v1/groups/{wa_group_id}/ask` | X-API-Key + member | `{question, user_id}` → `{answer, found, interpreted_range, sources[{message_id, excerpt, sender, ts, snippet}], latency_ms, trace}` |
+| GET | `/api/v1/groups` | X-API-Key | `[{wa_group_id, name, message_count, member_count, last_message_ts}]`, newest first |
+| GET | `/api/v1/groups/{wa_group_id}/members` | X-API-Key | `[{display_name, message_count}]`, most active first |
+| GET | `/api/v1/groups/{wa_group_id}/messages/{message_id}/context?user_id=&window=5` | X-API-Key + member | `{target_id, messages[{id, sender, ts, text, is_target}]}`; window 1-20 |
 
-Error codes: `UNAUTHORIZED` 401, `NOT_A_MEMBER` 403, `GROUP_NOT_FOUND` 404, `FILE_TOO_LARGE` 413, `UNPARSEABLE_EXPORT` 422.
+`trace` = `{rewrite, retrieval{queries[{text, vector_hits}], fts_query, fts_hits, merged}, reranked[{chunk_id, start_ts, end_ts, participants, score, preview, cited}], best_score, min_relevance, gated, rerank_enabled, prompt_version, latency_ms}`. Scores are raw reranker logits.
+
+Error codes: `UNAUTHORIZED` 401, `NOT_A_MEMBER` 403, `GROUP_NOT_FOUND` 404, `MESSAGE_NOT_FOUND` 404, `FILE_TOO_LARGE` 413, `UNPARSEABLE_EXPORT` 422.
 
 ---
 
@@ -161,7 +181,7 @@ Error codes: `UNAUTHORIZED` 401, `NOT_A_MEMBER` 403, `GROUP_NOT_FOUND` 404, `FIL
 
 ## 7. Testing
 
-- `make test` runs pytest over `api/tests/` (56 tests). The fakes are in `conftest.py`:
+- `make test` runs pytest over `api/tests/` (71 tests). `make web-test` runs `tsc --noEmit` plus vitest over `web/tests/` (21 tests: citation parsing, API error mapping, per-group threads, AnswerBlock, InspectorPane, ContextPanel and ImportDialog dialogs). The fakes are in `conftest.py`:
   - `FakeListChatModel` for the LLM
   - `BagOfWordsEmbeddings`, an overlap-sensitive fake embedding
   - `OverlapReranker`, a fake reranker

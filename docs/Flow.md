@@ -2,7 +2,7 @@
 
 How data and execution move through the system, traced across file boundaries. Update this file whenever core logic changes. For the static map, see `Architecture.md`.
 
-_Last updated: 2026-10-25 (HTTP MVP)._
+_Last updated: 2026-10-26 (HTTP MVP + web demo UI)._
 
 Notation: `[file:function()]`, `→` for a call or data handoff, **⚡** for a side effect or state change.
 
@@ -97,7 +97,8 @@ Properties:
 Client {question, user_id}
   → require_api_key()  (as above)
   → [routers/groups.py:ask()]   t0 = perf_counter()
-        SELECT group by wa_group_id → none → 404 GROUP_NOT_FOUND
+  → [routers/groups.py:resolve_member(s, wa_group_id, user_id)]   (shared with the context endpoint)
+        get_group(): SELECT group by wa_group_id → none → 404 GROUP_NOT_FOUND
         member_ref(user_id): contains "@" → WhatsApp id; else "name:<user_id>"
         SELECT user ⨝ memberships WHERE group AND wa_id_hash = hash_id(ref) → none → 403 NOT_A_MEMBER
   → [query/chain.py:build_ask_chain(...)]   built per request (collection + group are request-specific)
@@ -112,14 +113,16 @@ Client {question, user_id}
          ⚡ Gemini call #1 (~1-3 s); any failure falls back to {normalized=q, expansions=[], keywords=[]}
          (rewriter None in config → identity_rewrite, no LLM call)
 
-    2. assign(candidates)   hybrid_retrieve()
+    2a. assign(hits)        retrieve_lists()   (raw lists kept for the trace)
          queries = dedupe([q, rewrite.normalized, *rewrite.expansions])
          vector.batch(queries)                    → one ranked list per query (BGE-M3 query embeddings)
          fts.invoke(q + " " + keywords)           → [indexing/fts.py]
                fts_query(): clean_text → tokens → '"t1" OR "t2" ...'
                SELECT rowid FROM chunks_fts WHERE MATCH AND group_id ORDER BY bm25 LIMIT k
                → SELECT chunks → chunk_to_document()
-         → [query/rrf.py:rrf_merge(lists, k=rrf_k 60)]  score = Σ 1/(60 + rank), metadata.rrf_score
+         → {queries, vector: [[Doc]..], fts: [Doc], fts_query}
+    2b. assign(candidates)  merge()
+         → [query/rrf.py:rrf_merge([*vector, fts], k=rrf_k 60)]  score = Σ 1/(60 + rank), metadata.rrf_score
 
     3. assign(top)          do_rerank() → [query/rerank.py:rerank()]
          first rerank_top_n (20) candidates × every query variant → reranker.score(pairs)  (raw logits)
@@ -141,12 +144,17 @@ Client {question, user_id}
          → [query/citations.py:pick_citations(answer, cited, ...)]
                SELECT the cited chunks' messages ⨝ users (non-system)
                score = cos(embed(answer), embed("[HH:MM] Sender: text")) + 0.5 if "HH:MM" is in the answer
-               best message per chunk → {sender, ts (ISO, +05:30), snippet[:200]}
-         → {found, answer, sources, interpreted_range: None, chunk_ids, best_score, prompt_version}
+               best message per chunk → {message_id, sender, ts (ISO, +05:30), snippet[:200]}
+         gated = below_min_relevance(x)   (same predicate as the branch)
+         → [query/trace.py:build_trace(x, cited_ids, gated, ...)]   pure; reads hits/candidates/top
+               → {rewrite, retrieval counts, reranked[score, range, participants, preview[:160], cited],
+                  best_score, min_relevance, gated, rerank_enabled, prompt_version}
+         → {found, answer, sources, interpreted_range: None, chunk_ids, best_score, prompt_version, trace}
 
   ← back in ask(): latency_ms
      ⚡ INSERT query_logs (query, intent="ask", retrieved_chunk_ids JSON, answer, latency, model, prompt_version)
-  → 200 AskResponse {answer, found, interpreted_range, sources, latency_ms}
+        (the trace is NOT logged)
+  → 200 AskResponse {answer, found, interpreted_range, sources, latency_ms, trace{..., latency_ms}}
 ```
 
 Latency (measured 2026-10-24): 3.0-6.5 s end to end. Stages haven't been timed separately yet. Reranking 21 pairs took 0.05 s on the GPU, so most of the time is presumably the two Gemini calls. Per-stage timing would be the job of a callback handler (see Decisions D-17).
@@ -182,6 +190,47 @@ pytest → [api/tests/conftest.py]
    OverlapReranker: -11 + 3 per shared word, capped at 0
    FakeListChatModel: canned answers; an empty list raises if the LLM is called
 API tests: app.dependency_overrides[get_session_factory | get_models] → TestClient
+```
+
+---
+
+## 5. Web demo UI (`web/`)
+
+All browser calls go to the Vite dev server (`:5173`), never straight to the API:
+
+```
+Browser fetch("/api/v1/...")  [web/src/api.ts:request()]
+  → [web/vite.config.ts] proxy /api → http://127.0.0.1:8000, adds X-API-Key (read from ../.env by loadEnv)
+  → FastAPI route
+  ← JSON → typed result, or ApiError(code, message, status):
+       {error:{code,message}} → that code; 401 → "API key mismatch: check API_KEY in .env"
+       non-JSON body / network failure → API_UNREACHABLE "API not reachable at 127.0.0.1:8000. Run make run."
+```
+
+**Page load:** `[App.tsx]` → `listGroups()` → `GET /groups` (operator view, counts only) → select the newest group (or show the import empty state) → `[thread.ts:loadThread(wa_group_id)]` restores the tab's turns from sessionStorage (pending turns dropped).
+
+**Import:** `[ImportDialog.tsx:submit()]` checks `.txt`, at most 20 MB, and an id matching `[a-z0-9-]+` → `importChat()` → `POST /groups/{id}/import` (flow 1) → "Imported N new messages into M chunks." or "No new messages; already imported." → `refresh(id)` selects it.
+
+**Ask as:** `[ChatPane.tsx]` on group change → `listMembers()` → `GET /groups/{id}/members` → `<select>` (last choice remembered per group in sessionStorage).
+
+**Ask:**
+```
+[ChatPane.tsx:send()]  ⚡ append Turn{status: pending} → selected for the inspector
+  → ask(group, q, askAs) → POST /groups/{id}/ask (flow 2)
+  ⚡ Turn → done {response} | error {message};  ⚡ [thread.ts:saveThread()] sessionStorage
+  → [AnswerBlock.tsx] splitCitations(answer, sources.length): [n] in range → marker button, else plain text
+  → [InspectorPane.tsx] renders response.trace (rewrite, retrieval counts, reranked logits, gate, run)
+```
+
+**Open a citation:**
+```
+marker / source click → onOpenSource(source.message_id)
+  → [ContextPanel.tsx] getContext(group, message_id, turn.askedAs, 5)
+  → GET /groups/{id}/messages/{mid}/context
+       [routers/groups.py:get_context()] → resolve_member() (403 for non-members)
+       target missing / other group / system → 404 MESSAGE_NOT_FOUND
+       up to 5 non-system messages before (ts,id) < target and up to 5 after, ordered by (ts, id)
+  ← {target_id, messages[...is_target]} → overlay on the chat column, target highlighted; Esc closes, focus returns
 ```
 
 ---

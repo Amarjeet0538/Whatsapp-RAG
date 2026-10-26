@@ -45,6 +45,8 @@ def pick_citations(
             seen.add(m.id)
             out.append(
                 {
+                    "message_id": m.id,
+                    "excerpt": d.metadata.get("excerpt", 1),
                     "sender": name,
                     "ts": m.ts.replace(tzinfo=tz).isoformat(),
                     "snippet": m.text_raw[:SNIPPET_CHARS],

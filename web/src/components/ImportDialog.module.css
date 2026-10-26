@@ -1,0 +1,32 @@
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0;
+}
+
+.dialog::backdrop {
+  background: rgb(28 27 24 / 0.35);
+}
+
+.form {
+  display: grid;
+  gap: var(--s4);
+  padding: var(--s5);
+}
+
+.title {
+  font-size: var(--t-xl);
+}
+
+.status {
+  min-height: 1.5em;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
