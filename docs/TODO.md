@@ -10,3 +10,5 @@
 - [x] `/health` checks DB, Chroma, and Gemini key
 - [x] Chat export parser (Android + iOS) with unit tests
 - [ ] Synthetic Hinglish dataset plan (`data/`, `eval/datasets/`)
+
+claude --resume 7741159e-da0e-4634-9d67-8e2e0feec905
